@@ -33,5 +33,10 @@ task :update_subs_prices_on_recharge do |t|
     FixPrices::ThreeItems.new.update_subs_on_recharge
 end
 
+desc 'update three months subs with old recharge price'
+task :update_three_months_subs do |t|
+    FixPrices::ThreeItems.new.fix_three_months
+end
+
 
 end

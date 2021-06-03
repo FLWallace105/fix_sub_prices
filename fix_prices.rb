@@ -136,6 +136,52 @@ module FixPrices
           end
 
 
+          def fix_three_months
+            #delete old file
+            File.delete('rolled_back_prepaid_subs.csv') if File.exist?('rolled_back_prepaid_subs.csv')
+            #Headers for CSV
+            column_header = ["subscription_id", "product", "new_price", "recharge_result"]
+            CSV.open('rolled_back_prepaid_subs.csv','a+', :write_headers=> true, :headers => column_header) do |hdr|
+                column_header = nil
+
+
+            my_subs_to_update = FixPriceSub.where("needs_price_updated = \'t\' and updated = \'t\' and product_title ilike \'3%Month%\' ")
+
+            my_subs_to_update.each do |mys|
+
+                price = 116.87
+                my_title = mys.product_title
+
+                case my_title
+                when /\s3\sitems\s\sauto\srenew/i
+                    price = 99.85
+                when /\s3\sitem/i
+                    price = 116.87
+                when /\s5\sitem/i
+                    price = 124.87
+                else
+                    price = 116.87
+                end
+                
+                puts "Subscription_id = #{mys.subscription_id} Product = #{my_title} New price = #{price}"
+
+                body = { "price" => price}.to_json
+                
+                my_update_sub = HTTParty.put("https://api.rechargeapps.com/subscriptions/#{mys.subscription_id}", :headers => @my_change_header, :body => body, :timeout => 80)
+                puts my_update_sub.inspect
+                recharge_limit = my_update_sub.response["x-recharge-limit"]
+                determine_limits(recharge_limit, 0.65)
+                hdr << [mys.subscription_id, my_title, price, my_update_sub.parsed_response['subscription']]
+            
+            end
+
+            end
+            #CSV above
+
+
+          end 
+
+
           def determine_limits(recharge_header, limit)
             puts "recharge_header = #{recharge_header}"
             my_numbers = recharge_header.split("/")
