@@ -181,6 +181,91 @@ module FixPrices
 
           end 
 
+          def fix_multiple_subs
+            #Fix multiple subs for the customer.
+            puts "Hi ... starting"
+            num_multiple = 0
+            MultipleFixPriceSub.delete_all
+            ActiveRecord::Base.connection.reset_pk_sequence!('multiple_fix_price_subs')
+
+            CSV.foreach('gabby_csv_input.csv', :encoding => 'ISO-8859-1', :headers => true) do |row|
+                #puts row.inspect
+                customer_id = row['customer_id']
+                puts customer_id
+                my_sub = Subscription.where("product_title ilike \'%3%item%\' and customer_id = ? and created_at < ? and is_prepaid = ?", customer_id, '2019-08-01', false)
+                puts "my_sub = #{my_sub.inspect}"
+                puts "count of subs = #{my_sub.count}"
+                if my_sub.count > 1
+                    num_multiple += 1
+                    my_sub.each do |mys|
+                        puts "******************"
+                        puts mys.inspect
+                        puts "******************"
+                        temp_sub = mys
+                        MultipleFixPriceSub.create(subscription_id: temp_sub.subscription_id, address_id: temp_sub.address_id, customer_id: temp_sub.customer_id, created_at: temp_sub.created_at, updated_at: temp_sub.updated_at, next_charge_scheduled_at: temp_sub.next_charge_scheduled_at, cancelled_at: temp_sub.cancelled_at,  product_title: temp_sub.product_title, price: temp_sub.price, quantity: temp_sub.quantity, status: temp_sub.status, shopify_product_id: temp_sub.shopify_product_id, shopify_variant_id: temp_sub.shopify_variant_id, sku: temp_sub.sku,  order_interval_unit: temp_sub. order_interval_unit, order_interval_frequency: temp_sub.order_interval_frequency, charge_interval_frequency: temp_sub.charge_interval_frequency, order_day_of_month: temp_sub.order_day_of_month, order_day_of_week: temp_sub.order_day_of_week, raw_line_item_properties: temp_sub.raw_line_item_properties, expire_after_specific_number_charges: temp_sub.expire_after_specific_number_charges, is_prepaid: temp_sub.is_prepaid)
+                    end
+                end
+
+
+            end
+
+            puts "We have #{num_multiple} subs"
+
+          end
+
+
+          def filter_out_already_processed
+            puts "Starting filter out"
+
+            mysql = "select subscription_id from multiple_fix_price_subs where subscription_id in (select subscription_id from fix_prices_subs)"
+            array_to_delete = Array.new
+
+            subscription_id_to_remove = ActiveRecord::Base.connection.execute(mysql).values.flatten
+            puts subscription_id_to_remove.inspect
+            subscription_id_to_remove.each do |sub_id|
+                puts "subscription_id = #{sub_id}"
+                my_sub = MultipleFixPriceSub.find_by_subscription_id(sub_id)
+                puts "ID for sub = #{my_sub.id}"
+                array_to_delete.push(my_sub.id)
+                
+
+
+            end
+            puts "Deleting ..."
+            MultipleFixPriceSub.delete(array_to_delete)
+
+
+          end
+
+
+          def fix_multiple_subs_recharge_after_filter
+            puts "Starting"
+            my_subs_to_update = MultipleFixPriceSub.where("updated = \'f\' ")
+
+            my_subs_to_update.each do |mys|
+
+                my_now = DateTime.now
+                body = { "price" => @price_should_be}.to_json
+                
+                my_update_sub = HTTParty.put("https://api.rechargeapps.com/subscriptions/#{mys.subscription_id}", :headers => @my_change_header, :body => body, :timeout => 80)
+                puts my_update_sub.inspect
+                recharge_limit = my_update_sub.response["x-recharge-limit"]
+                determine_limits(recharge_limit, 0.65)
+                if my_update_sub.code == 200
+                    mys.updated = true
+                    mys.date_price_updated_at = my_now
+                    mys.save!
+
+                else
+                    puts "Could not process the subscription id = #{mys.subscription_id}"
+                end
+               
+
+            end
+
+
+          end
+
 
           def determine_limits(recharge_header, limit)
             puts "recharge_header = #{recharge_header}"

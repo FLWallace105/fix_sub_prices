@@ -38,5 +38,21 @@ task :update_three_months_subs do |t|
     FixPrices::ThreeItems.new.fix_three_months
 end
 
+desc 'fix prices for multiple subs'
+task :fix_prices_multiple_subs do |t|
+    FixPrices::ThreeItems.new.fix_multiple_subs
+
+end
+
+desc 'filter out already processed subs'
+task :filter_out_already_processed do |t|
+    FixPrices::ThreeItems.new.filter_out_already_processed
+end
+
+desc 'fix prices after filtering on subs'
+task :fix_prices_after_filter do |t|
+    FixPrices::ThreeItems.new.fix_multiple_subs_recharge_after_filter
+end
+
 
 end
