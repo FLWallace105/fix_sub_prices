@@ -1,0 +1,158 @@
+require 'dotenv'
+require 'httparty'
+
+require 'active_record'
+require 'sinatra/activerecord'
+
+
+
+Dotenv.load
+Dir[File.join(__dir__, 'lib', '*.rb')].each { |file| require file }
+Dir[File.join(__dir__, 'models', '*.rb')].each { |file| require file }
+
+
+module FixPrices
+    class ThreeItems
+        def initialize
+            Dotenv.load
+            recharge_regular = ENV['RECHARGE_ACCESS_TOKEN']
+            recharge_staging = ENV['STAGING_RECHARGE_ACCESS_TOKEN']
+            
+            
+            @my_header = {
+              "X-Recharge-Access-Token" => recharge_regular
+            }
+            @my_change_header = {
+              "X-Recharge-Access-Token" => recharge_regular,
+              "Accept" => "application/json",
+              "Content-Type" =>"application/json"
+            }
+            @price_should_be = 39.95
+            
+          end
+
+          def input_three_items
+            puts "Hi"
+            #my_subs = Subscription.where("created_at < ?", '2019-08-01')
+            #my_subs.each do |mys|
+            #    puts mys.inspect
+            #end
+            FixPriceSub.delete_all
+            ActiveRecord::Base.connection.reset_pk_sequence!('fix_prices_subs')
+
+            num_price_changes = 0
+            CSV.foreach('gabby_csv_input.csv', :encoding => 'ISO-8859-1', :headers => true) do |row|
+                #puts row.inspect
+                customer_id = row['customer_id']
+                my_sub = Subscription.where("product_title ilike \'%3%item%\' and customer_id = ? and created_at < ?", customer_id, '2019-08-01').first
+                if my_sub != nil
+                    puts row.inspect
+                    puts my_sub.inspect
+                    num_price_changes += 1
+                    FixPriceSub.create(subscription_id: my_sub.subscription_id, address_id: my_sub.address_id, customer_id: my_sub.customer_id, created_at: my_sub.created_at, updated_at: my_sub.updated_at, next_charge_scheduled_at: my_sub.next_charge_scheduled_at, cancelled_at: my_sub.cancelled_at,  product_title: my_sub. product_title, price: my_sub.price, quantity: my_sub.quantity, status: my_sub.status, shopify_product_id: my_sub.shopify_product_id, shopify_variant_id: my_sub.shopify_variant_id, sku: my_sub.sku,  order_interval_unit: my_sub. order_interval_unit, order_interval_frequency: my_sub.order_interval_frequency, charge_interval_frequency: my_sub.charge_interval_frequency, order_day_of_month: my_sub.order_day_of_month, order_day_of_week: my_sub.order_day_of_week, raw_line_item_properties: my_sub.raw_line_item_properties, expire_after_specific_number_charges: my_sub.expire_after_specific_number_charges, is_prepaid: my_sub.is_prepaid)
+                end
+
+
+            end
+            puts "We have potentially #{num_price_changes} subs to change"
+
+            puts "We have #{FixPriceSub.count} subs to potentially fix prices upon"
+
+          end
+
+          def check_for_current_recharge_price
+            puts "Starting ..."
+            my_fix_prices = FixPriceSub.where("price_checked_on_recharge = ?", false)
+            my_fix_prices.each do |myprice|
+                #GET /subscriptions/:id
+                puts myprice.inspect
+                recharge_sub_info = HTTParty.get("https://api.rechargeapps.com/subscriptions/#{myprice.subscription_id}", :headers => @my_header,  :timeout => 80)  
+                puts recharge_sub_info.inspect 
+                if recharge_sub_info.parsed_response['errors']
+                    myprice.not_found = true
+                    myprice.price_checked_on_recharge = true
+                    myprice.save!
+                    next
+                end
+                myprice.price_checked_on_recharge = true
+                local_price = recharge_sub_info.parsed_response['subscription']['price']
+                puts "local_price = #{local_price}"
+                if local_price.to_f > @price_should_be
+                    puts "We should update this price on ReCharge"
+                    #myprice.price_checked_on_recharge = true
+                    myprice.needs_price_updated = true
+                    myprice.price_on_recharge = local_price.to_f
+                    
+                end
+                myprice.save!
+                recharge_limit = recharge_sub_info.response["x-recharge-limit"]
+                determine_limits(recharge_limit, 0.65)
+                
+
+            end
+
+          end
+
+
+          def update_subs_on_recharge
+            my_subs_to_update = FixPriceSub.where("needs_price_updated = \'t\' and updated = \'f\' ")
+
+            my_subs_to_update.each do |mys|
+
+                my_now = DateTime.now
+                body = { "price" => @price_should_be}.to_json
+                
+                my_update_sub = HTTParty.put("https://api.rechargeapps.com/subscriptions/#{mys.subscription_id}", :headers => @my_change_header, :body => body, :timeout => 80)
+                puts my_update_sub.inspect
+                recharge_limit = my_update_sub.response["x-recharge-limit"]
+                determine_limits(recharge_limit, 0.65)
+                if my_update_sub.code == 200
+                    mys.updated = true
+                    mys.date_price_updated_at = my_now
+                    mys.save!
+
+                else
+                    puts "Could not process the subscription id = #{mys.subscription_id}"
+                end
+               
+
+            end
+
+          end
+
+          def update_one_sub_recharge(sub_id)
+            puts "Hi"
+            puts "Working on sub_id #{sub_id}"
+            
+            recharge_sub_info = HTTParty.get("https://api.rechargeapps.com/subscriptions/#{sub_id}", :headers => @my_header,  :timeout => 80)  
+            puts recharge_sub_info.inspect 
+            puts "------------------"
+
+            body = { "price" => @price_should_be}.to_json
+            my_update_sub = HTTParty.put("https://api.rechargeapps.com/subscriptions/#{sub_id}", :headers => @my_change_header, :body => body, :timeout => 80)
+            puts my_update_sub.inspect
+
+
+          end
+
+
+          def determine_limits(recharge_header, limit)
+            puts "recharge_header = #{recharge_header}"
+            my_numbers = recharge_header.split("/")
+            my_numerator = my_numbers[0].to_f
+            my_denominator = my_numbers[1].to_f
+            my_limits = (my_numerator/ my_denominator)
+            puts "We are using #{my_limits} % of our API calls"
+            if my_limits > limit
+                puts "Sleeping 15 seconds"
+                sleep 15
+            else
+                puts "not sleeping at all"
+            end
+      
+          end
+
+
+
+    end
+end
